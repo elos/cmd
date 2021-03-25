@@ -70,6 +70,38 @@ func runGoog(ctx context.Context, args []string) int {
 			googGetThread(ctx, c, args[2:])
 			return 0
 		}
+	case "done":
+		if len(args) == 1 {
+			fmt.Println("m goog done [thread-id]")
+			return 0
+		}
+
+		googThreadArchive(ctx, c, args[1])
+		return 0
+	case "trash":
+		if len(args) == 1 {
+			fmt.Println("m goog trash [message-id]")
+			return 0
+		}
+
+		googThreadTrash(ctx, c, args[1])
+		return 0
+	case "read":
+		if len(args) == 1 {
+			fmt.Println("m goog read [message-id]")
+			return 0
+		}
+
+		googThreadRead(ctx, c, args[1], false)
+		return 0
+	case "readh":
+		if len(args) == 1 {
+			fmt.Println("m goog read [message-id]")
+			return 0
+		}
+
+		googThreadRead(ctx, c, args[1], true)
+		return 0
 	case "search":
 		if len(args) == 1 {
 			fmt.Println("m goog search <query>")
@@ -319,9 +351,12 @@ func printPart(p *gmail.MessagePart, prefix string) {
 	//	fmt.Printf("%sBody: %s\n", prefix, p.Body.Data)
 	fmt.Printf("%sMimeType: %s\n", prefix, p.MimeType)
 	fmt.Printf("%sHeaders:\n", prefix)
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 1, ' ', 0)
+	fmt.Fprintln(w, fmt.Sprintf("%sNAME\tVALUE\t", prefix))
 	for _, h := range p.Headers {
-		fmt.Printf("%s%s=%s,", prefix, h.Name, h.Value)
+		fmt.Fprintf(w, "%s%s\t%s\t\n", prefix, h.Name, first(h.Value, 50))
 	}
+	w.Flush()
 	fmt.Println()
 	decoded, err := base64.URLEncoding.DecodeString(p.Body.Data)
 	if err != nil {
@@ -334,5 +369,69 @@ func printPart(p *gmail.MessagePart, prefix string) {
 	for i, p := range p.Parts {
 		fmt.Printf("%d.\n", i)
 		printPart(p, prefix+"  ")
+	}
+}
+
+func textBody(root *gmail.MessagePart, html bool) string {
+	stack := make([]*gmail.MessagePart, 1)
+	stack[0] = root
+
+	for len(stack) > 0 {
+		pop := stack[len(stack)-1]
+		stack = stack[0 : len(stack)-1]
+
+		if html {
+			if pop.MimeType == "text/html" {
+				decoded, err := base64.URLEncoding.DecodeString(pop.Body.Data)
+				if err != nil {
+					log.Fatal(err)
+				}
+				return string(decoded)
+			}
+		} else {
+			if pop.MimeType == "text/plain" {
+				decoded, err := base64.URLEncoding.DecodeString(pop.Body.Data)
+				if err != nil {
+					log.Fatal(err)
+				}
+				return string(decoded)
+			}
+		}
+
+		for _, p := range pop.Parts {
+			stack = append(stack, p)
+		}
+	}
+
+	return "No body found."
+}
+
+func googThreadRead(ctx context.Context, c *gmail.Service, id string, html bool) {
+	ts := gmail.NewUsersThreadsService(c)
+	t, err := ts.Get("me", id).Context(ctx).Do()
+	if err != nil {
+		fmt.Printf("Get error: %v", err)
+		os.Exit(1)
+	}
+
+	lastM := t.Messages[len(t.Messages)-1]
+
+	fmt.Println(textBody(lastM.Payload, html))
+}
+
+func googThreadArchive(ctx context.Context, c *gmail.Service, id string) {
+	ts := gmail.NewUsersThreadsService(c)
+	_, err := ts.Modify("me", id, &gmail.ModifyThreadRequest{
+		RemoveLabelIds: []string{"INBOX"},
+	}).Context(ctx).Do()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+func googThreadTrash(ctx context.Context, c *gmail.Service, id string) {
+	ts := gmail.NewUsersThreadsService(c)
+	_, err := ts.Trash("me", id).Context(ctx).Do()
+	if err != nil {
+		log.Fatal(err)
 	}
 }
